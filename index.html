@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SQL Query Visualizer</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">&#9707;</span>
+        <span class="logo-text">SQL Query Visualizer</span>
+      </div>
+      <div class="header-actions">
+        <button id="themeToggle" class="btn btn-ghost" title="Toggle theme">&#9790;</button>
+        <a href="https://github.com/sudharshanhegde" target="_blank" class="btn btn-ghost" title="GitHub">
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="main">
+    <!--This takes the sql query as input -->
+    <section class="panel panel-input">
+      <div class="panel-header">
+        <h2>SQL Input</h2>
+        <div class="panel-header-actions">
+          <button id="loadSample" class="btn btn-sm btn-outline">Load Sample</button>
+          <button id="clearBtn" class="btn btn-sm btn-ghost">Clear</button>
+        </div>
+      </div>
+      <textarea
+        id="sqlInput"
+        class="sql-textarea"
+        placeholder="Paste your SQL query or stored procedure here..."
+        spellcheck="false"
+      ></textarea>
+      <div class="input-footer">
+        <button id="parseBtn" class="btn btn-primary btn-full">
+          <span>&#9654;</span> Visualize Query
+        </button>
+        <div id="parseError" class="parse-error hidden"></div>
+      </div>
+    </section>
+
+    <!--This panel is for visualization purposes -->
+    <section class="panel panel-viz" id="vizPanel">
+      <div class="empty-state" id="emptyState">
+        <div class="empty-icon">&#9707;</div>
+        <p>Paste a SQL query and click <strong>Visualize Query</strong> to get started</p>
+        <p class="empty-sub">Supports SELECT, CTEs, JOINs, subqueries, WHERE, GROUP BY, ORDER BY</p>
+      </div>
+
+      <div class="viz-content hidden" id="vizContent">
+        <!-- This gives the summary -->
+        <div class="summary-bar" id="summaryBar"></div>
+
+        <!-- Tabs for showing what and all we have like tables columns conditions ctes etc-->
+        <div class="tabs">
+          <button class="tab active" data-tab="diagram">Join Diagram</button>
+          <button class="tab" data-tab="tables">Tables</button>
+          <button class="tab" data-tab="columns">Columns</button>
+          <button class="tab" data-tab="conditions">Conditions</button>
+          <button class="tab" data-tab="ctes">CTEs</button>
+          <button class="tab" data-tab="statements">Statements</button>
+        </div>
+
+        <!-- This is for join diagram such that we can visualise entirely without any issues and enter full screen mode when needed-->
+        <div class="tab-content active" id="tab-diagram">
+          <div class="diagram-wrap" id="diagramWrap">
+            <button class="fs-btn" id="fsBtn" title="Enter full screen">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+              </svg>
+              Full Screen
+            </button>
+            <div class="diagram-container">
+              <svg id="joinDiagram" class="join-svg"></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Tables grid for looking at what and all tables we had in our query -->
+        <div class="tab-content" id="tab-tables">
+          <div class="tables-grid" id="tablesGrid"></div>
+        </div>
+
+        <!-- Tab: What and all columns we had in our query-->
+        <div class="tab-content" id="tab-columns">
+          <div class="columns-list" id="columnsList"></div>
+        </div>
+
+        <!-- Tab: What and all conditions where present in our query -->
+        <div class="tab-content" id="tab-conditions">
+          <div class="conditions-view" id="conditionsView"></div>
+        </div>
+
+        <!-- Tab: The Common Table expressions in the query-->
+        <div class="tab-content" id="tab-ctes">
+          <div class="ctes-view" id="ctesView"></div>
+        </div>
+
+        <!-- Tab: All statements in the SP -->
+        <div class="tab-content" id="tab-statements">
+          <div class="statements-view" id="statementsView"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+<!-- Parser for parsing the logic in our query (brain bro brain)-->
+  <script src="js/parser.js"></script>
+<!-- Frontend beauty-->
+  <script src="js/app.js"></script>
+</body>
+</html>
