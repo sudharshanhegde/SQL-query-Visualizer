@@ -70,6 +70,7 @@ If you want to run this in your local just clone this and open index.html thats 
 
 
 Otherwise if you want to use through browser you can access through this link :-
+https://sudharshanhegde.github.io/SQL-query-Visualizer/
 
 
 Any changes or updates on the functionality or the issues are welcome, If you want to suggest a new feature, That is also welcome.
