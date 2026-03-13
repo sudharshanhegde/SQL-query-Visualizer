@@ -535,6 +535,8 @@ class SQLParser {
   /*  Multi-statement entry point */
   parseAll(sql) {
     this.reset();
+    // Strip T-SQL GO batch separators (replace each GO-only line with a semicolon)
+    sql = sql.replace(/^\s*GO\s*$/gim, ';');
     const cleaned = this._clean(sql);
     const stmts   = this._splitStatements(cleaned);
     return stmts.map(s => this._classifyStmt(s)).filter(Boolean);
@@ -553,11 +555,13 @@ class SQLParser {
       if (ch === '(') { parenDepth++; cur += ch; continue; }
       if (ch === ')') { parenDepth--; cur += ch; continue; }
 
-      // Track BEGIN/END/CASE blocks so semicolons inside them don't cause splits
+      // Track BEGIN/END/CASE blocks so semicolons inside them don't cause splits.
+      // BEGIN TRANSACTION/TRAN/WORK is NOT a block — it just starts a transaction.
       if (parenDepth === 0 && (i === 0 || !/\w/.test(upper[i - 1]))) {
         const rest = upper.slice(i);
         if (/^BEGIN\b/.test(rest)) {
-          blockDepth++;
+          const nextWord = rest.slice(5).trim();
+          if (!/^(TRANSACTION|TRAN|WORK)\b/.test(nextWord)) blockDepth++;
           cur += sql.slice(i, i + 5); i += 4; continue;
         }
         if (/^CASE\b/.test(rest)) {
@@ -580,7 +584,23 @@ class SQLParser {
 
   _classifyStmt(sql) {
     const up = sql.replace(/\s+/g, ' ').trim().toUpperCase();
-    if (/^(WITH|SELECT)\b/.test(up)) {
+
+    // WITH ... INSERT: CTE followed by an INSERT (not a SELECT)
+    if (/^WITH\b/.test(up)) {
+      try {
+        const { ctes, mainSql } = this._extractCTEs(this._clean(sql));
+        if (/^\s*INSERT\b/i.test(mainSql)) {
+          const r = this._parseInsertStmt(mainSql);
+          r.ctes = ctes;
+          return r;
+        }
+      } catch(e) {}
+      // Otherwise fall through to parse as SELECT (WITH ... SELECT)
+      try { return { stmtType: 'SELECT', ...this.parse(sql) }; }
+      catch(e) { return { stmtType: 'SELECT', raw: sql, error: e.message, tables:[], joins:[], columns:[], ctes:[], conditions:{} }; }
+    }
+
+    if (/^SELECT\b/.test(up)) {
       try { return { stmtType: 'SELECT', ...this.parse(sql) }; }
       catch(e) { return { stmtType: 'SELECT', raw: sql, error: e.message, tables:[], joins:[], columns:[], ctes:[], conditions:{} }; }
     }
@@ -593,21 +613,23 @@ class SQLParser {
     if (/^DROP\b/.test(up))     return this._parseDropStmt(sql);
     if (/^(EXEC|EXECUTE|CALL)\b/.test(up)) return this._parseExecStmt(sql);
     if (/^DECLARE\b/.test(up))  return this._parseDeclareStmt(sql);
+    if (/^SET\b/.test(up))      return this._parseSetStmt(sql);
     if (/^RENAME\b/.test(up))   return this._parseRenameStmt(sql);
     if (/^EXPLAIN\b/.test(up))  return { stmtType: 'EXPLAIN', raw: sql };
+    // BEGIN TRY...END TRY BEGIN CATCH...END CATCH — must come before general BEGIN handler
+    if (/^BEGIN\s+TRY\b/.test(up)) return this._parseTryCatchBlock(sql);
     if (/^(BEGIN|END|COMMIT|ROLLBACK|SAVEPOINT)\b/.test(up)) {
-      // BEGIN...END transaction/batch block — parse its contents
       if (/^BEGIN\b/.test(up)) {
         const rest = up.slice(5).trim();
-        // If it's more than just "BEGIN TRANSACTION" it's a block with body
-        if (rest && !/^(TRANSACTION|TRAN|WORK)\b\s*$/.test(rest))
+        // Pure BEGIN block (not a transaction keyword) — parse its contents
+        if (rest && !/^(TRANSACTION|TRAN|WORK|TRY|CATCH)\b/.test(rest))
           return this._parseBeginBlock(sql);
       }
-      return { stmtType: up.split(' ')[0], raw: sql };
+      return { stmtType: 'CONTROL', raw: sql };
     }
     if (/^IF\b/.test(up))    return this._parseIfStmt(sql);
     if (/^WHILE\b/.test(up)) return this._parseWhileStmt(sql);
-    if (/^(ELSE|LOOP|PRINT|RAISERROR|THROW|RETURN)\b/.test(up))
+    if (/^(ELSE|LOOP|PRINT|RAISERROR|THROW|RETURN|BREAK|CONTINUE)\b/.test(up))
       return { stmtType: 'CONTROL', raw: sql };
     return null;  // skip blanks / pure comments
   }
@@ -706,6 +728,16 @@ class SQLParser {
         result.onTable = idxM[1].replace(/[\[\]`"]/g, '');
         result.indexedColumns = idxM[2].split(',').map(c => c.trim().replace(/[\[\]`"]/g, ''));
         result.isUnique = /CREATE\s+UNIQUE\s+INDEX/i.test(sql);
+      }
+    }
+    // For PROCEDURE / FUNCTION: extract the body (AS BEGIN...END) and parse it
+    if (result.objectType === 'PROCEDURE' || result.objectType === 'FUNCTION') {
+      const bodyM = sql.match(/\bAS\b\s+(BEGIN\b[\s\S]*)/i);
+      if (bodyM) {
+        try {
+          const block = this._parseBeginBlock(bodyM[1]);
+          result.bodyStmts = block.bodyStmts;
+        } catch(e) {}
       }
     }
     return result;
@@ -903,6 +935,60 @@ class SQLParser {
     };
   }
 
+  /* SET statement (SET @var = val  or  SET OPTION ON/OFF) */
+  _parseSetStmt(sql) {
+    const varM = sql.match(/\bSET\s+(@[\w]+)\s*=\s*([\s\S]+?)$/i);
+    if (varM) return { stmtType: 'SET', varName: varM[1], value: varM[2].trim().slice(0, 100), raw: sql };
+    const optM = sql.match(/\bSET\s+([\w][\w\s]*?)\s+(ON|OFF)\s*$/i);
+    if (optM) return { stmtType: 'SET', option: optM[1].trim(), value: optM[2].toUpperCase(), raw: sql };
+    return { stmtType: 'SET', raw: sql };
+  }
+
+  /* BEGIN TRY...END TRY BEGIN CATCH...END CATCH */
+  _parseTryCatchBlock(sql) {
+    const upper = sql.toUpperCase();
+    const tryOpenM = upper.match(/^BEGIN\s+TRY\b/);
+    if (!tryOpenM) return { stmtType: 'TRY_BLOCK', tryStmts: [], catchStmts: [], raw: sql };
+
+    let tryBodyStart = tryOpenM[0].length;
+    while (tryBodyStart < sql.length && /\s/.test(sql[tryBodyStart])) tryBodyStart++;
+
+    // Scan for the matching END TRY, respecting nested BEGIN/END (but not BEGIN TRANSACTION)
+    let depth = 1, i = tryBodyStart;
+    while (i < sql.length && depth > 0) {
+      const prevIsWord = i > 0 && /\w/.test(upper[i - 1]);
+      if (!prevIsWord) {
+        const rest = upper.slice(i);
+        if (/^BEGIN\b/.test(rest)) {
+          const nextWord = rest.slice(5).trim();
+          if (!/^(TRANSACTION|TRAN|WORK)\b/.test(nextWord)) depth++;
+          i += 5; continue;
+        }
+        if (/^CASE\b/.test(rest)) { depth++; i += 4; continue; }
+        if (/^END\b/.test(rest))  { depth--; if (depth === 0) break; i += 3; continue; }
+      }
+      i++;
+    }
+
+    const tryContent = sql.slice(tryBodyStart, i).trim();
+
+    // Find BEGIN CATCH...END CATCH after END TRY
+    const afterEndTry = sql.slice(i).replace(/^END\s+TRY\b\s*/i, '');
+    const catchBodyM  = afterEndTry.match(/^\s*BEGIN\s+CATCH\b([\s\S]*?)\bEND\s+CATCH\b/i);
+    const catchContent = catchBodyM ? catchBodyM[1].trim() : '';
+
+    const parse = s => s
+      ? this._splitStatements(s).map(x => this._classifyStmt(x)).filter(Boolean)
+      : [];
+
+    return {
+      stmtType:   'TRY_BLOCK',
+      tryStmts:   parse(tryContent),
+      catchStmts: parse(catchContent),
+      raw: sql
+    };
+  }
+
   /* Window function extraction */
   _extractWindowFunctions(columns) {
     const result = [];
@@ -944,9 +1030,15 @@ class SQLParser {
     while (i < sql.length && depth > 0) {
       const prevIsWord = i > 0 && /\w/.test(upper[i - 1]);
       if (!prevIsWord) {
-        if (/^BEGIN\b/.test(upper.slice(i))) { depth++; i += 5; continue; }
-        if (/^CASE\b/.test(upper.slice(i)))  { depth++; i += 4; continue; }
-        if (/^END\b/.test(upper.slice(i)))   { depth--; if (depth === 0) break; i += 3; continue; }
+        const rest = upper.slice(i);
+        if (/^BEGIN\b/.test(rest)) {
+          // BEGIN TRANSACTION/TRAN/WORK is NOT a block
+          const nextWord = rest.slice(5).trim();
+          if (!/^(TRANSACTION|TRAN|WORK)\b/.test(nextWord)) depth++;
+          i += 5; continue;
+        }
+        if (/^CASE\b/.test(rest))  { depth++; i += 4; continue; }
+        if (/^END\b/.test(rest))   { depth--; if (depth === 0) break; i += 3; continue; }
       }
       i++;
     }

@@ -4,6 +4,9 @@
 
   const parser = new SQLParser();
 
+  // Multi-query navigation state
+  let allSelectResults = [], currentSelectIdx = 0, lastStatements = [];
+
   /* DOM References like for real refferal */
   const $ = (sel) => document.querySelector(sel);
   const sqlInput    = $('#sqlInput');
@@ -74,26 +77,48 @@
       return;
     }
 
-    // Collect ALL SELECT results (including those nested inside IF/WHILE blocks)
+    // Collect ALL SELECT results (including those nested inside IF/WHILE/TRY blocks and procedures)
     function collectSelects(stmts) {
       const selects = [];
       for (const s of stmts) {
-        if (s.stmtType === 'SELECT') selects.push(s);
+        if (s.stmtType === 'SELECT') {
+          const firstName = s.tables.filter(t => !t.isSubquery)[0]?.name;
+          const label = s.tables && s.tables.length && firstName
+            ? 'SELECT · ' + firstName
+            : 'SELECT';
+          selects.push({ ...s, _label: label });
+        }
+        if (s.stmtType === 'INSERT' && s.selectResult) {
+          const tbl  = s.targetTable ? s.targetTable.split('.').pop() : '';
+          const from = s.selectResult.tables && s.selectResult.tables.filter(t => !t.isSubquery)[0];
+          const label = 'INSERT→' + tbl + (from ? ' · ' + from.name : '');
+          selects.push({ ...s.selectResult, _label: label });
+        }
         if (s.stmtType === 'IF') {
           selects.push(...collectSelects(s.thenStmts || []));
           selects.push(...collectSelects(s.elseStmts || []));
         }
-        if (s.stmtType === 'WHILE') selects.push(...collectSelects(s.bodyStmts || []));
-        if (s.stmtType === 'BEGIN_BLOCK') selects.push(...collectSelects(s.bodyStmts || []));
-        if (s.stmtType === 'INSERT' && s.selectResult) selects.push(s.selectResult);
+        if (s.stmtType === 'WHILE')       selects.push(...collectSelects(s.bodyStmts  || []));
+        if (s.stmtType === 'BEGIN_BLOCK')  selects.push(...collectSelects(s.bodyStmts  || []));
+        if (s.stmtType === 'TRY_BLOCK') {
+          selects.push(...collectSelects(s.tryStmts   || []));
+          selects.push(...collectSelects(s.catchStmts || []));
+        }
+        if (s.stmtType === 'CREATE' && s.bodyStmts)
+          selects.push(...collectSelects(s.bodyStmts));
       }
       return selects;
     }
-    const allSelects = collectSelects(statements);
-    const mainResult = allSelects[0] || {
+
+    allSelectResults = collectSelects(statements);
+    lastStatements   = statements;
+    currentSelectIdx = 0;
+
+    const emptyResult = {
       stmtType: 'SELECT', tables: [], joins: [], columns: [], ctes: [],
       conditions: { where: null, groupBy: [], having: null, orderBy: [] }
     };
+    const mainResult = allSelectResults[0] || emptyResult;
 
     emptyState.classList.add('hidden');
     vizContent.classList.remove('hidden');
@@ -102,6 +127,7 @@
   }
 
   function renderVisualization(result, statements) {
+    renderQueryNav();
     renderSummary(result, statements);
     renderDiagram(result);
     renderTables(result);
@@ -109,6 +135,48 @@
     renderConditions(result);
     renderCTEs(result);
     renderStatements(statements);
+  }
+
+  /* Query navigation bar — shows "← Q 2 / 9 — INSERT→WorkflowFormMapping → " */
+  function renderQueryNav() {
+    const nav = $('#queryNav');
+    if (!nav) return;
+
+    if (allSelectResults.length <= 1) {
+      nav.classList.add('hidden');
+      return;
+    }
+    nav.classList.remove('hidden');
+
+    const q     = allSelectResults[currentSelectIdx];
+    const label = q._label || ('Query ' + (currentSelectIdx + 1));
+    nav.innerHTML = `
+      <button class="qnav-btn" id="queryPrev" title="Previous query" ${currentSelectIdx === 0 ? 'disabled' : ''}>&#8592;</button>
+      <span class="qnav-center">
+        <span class="qnav-label">
+          <span class="qnav-pos">${currentSelectIdx + 1} / ${allSelectResults.length}</span>
+          <span class="qnav-lbl">${esc(label)}</span>
+        </span>
+        <span class="qnav-hint">Use arrows to browse all queries &amp; see their tables in the diagram</span>
+      </span>
+      <button class="qnav-btn" id="queryNext" title="Next query" ${currentSelectIdx === allSelectResults.length - 1 ? 'disabled' : ''}>&#8594;</button>
+    `;
+
+    $('#queryPrev').addEventListener('click', () => goToQuery(currentSelectIdx - 1));
+    $('#queryNext').addEventListener('click', () => goToQuery(currentSelectIdx + 1));
+  }
+
+  function goToQuery(idx) {
+    currentSelectIdx = Math.max(0, Math.min(idx, allSelectResults.length - 1));
+    const res = allSelectResults[currentSelectIdx];
+    renderQueryNav();
+    renderSummary(res, lastStatements);
+    renderDiagram(res);
+    renderTables(res);
+    renderColumns(res);
+    renderConditions(res);
+    renderCTEs(res);
+    // Statements tab always shows all statements — no re-render needed
   }
 
   /* Ofcourse we need a summary bar or how else will you know? */
@@ -832,9 +900,9 @@
       SELECT:   '#34d399', INSERT:   '#4f8ef7', UPDATE:  '#f59e0b',
       DELETE:   '#f87171', TRUNCATE: '#ef4444', ALTER:   '#a78bfa',
       CREATE:   '#22d3ee', DROP:     '#f87171', EXEC:    '#8892a4',
-      DECLARE:  '#8892a4', CONTROL:  '#5a647a',
+      DECLARE:  '#8892a4', CONTROL:  '#5a647a', SET:     '#64748b',
       IF:       '#22d3ee', WHILE:    '#86efac', BEGIN_BLOCK: '#64748b',
-      RENAME:   '#fb923c', EXPLAIN:  '#8892a4',
+      TRY_BLOCK:'#34d399', RENAME:   '#fb923c', EXPLAIN: '#8892a4',
     };
     return map[type] || '#5a647a';
   }
@@ -878,9 +946,11 @@
         case 'IF':    title = stmt.condition ? `IF ${stmt.condition.slice(0,50)}` : 'IF block'; break;
         case 'WHILE':       title = stmt.condition ? `WHILE ${stmt.condition.slice(0,50)}` : 'WHILE loop'; break;
         case 'BEGIN_BLOCK': title = `Transaction Block (${(stmt.bodyStmts || []).length} statement${(stmt.bodyStmts||[]).length!==1?'s':''})`; break;
-        case 'RENAME':   title = stmt.oldName && stmt.newName ? `RENAME ${stmt.oldName} → ${stmt.newName}` : 'RENAME'; break;
-        case 'EXPLAIN':  title = (stmt.raw || '').replace(/^EXPLAIN\s+/i, '').slice(0, 60); break;
-        default:         title = stmt.stmtType;
+        case 'RENAME':    title = stmt.oldName && stmt.newName ? `RENAME ${stmt.oldName} → ${stmt.newName}` : 'RENAME'; break;
+        case 'EXPLAIN':   title = (stmt.raw || '').replace(/^EXPLAIN\s+/i, '').slice(0, 60); break;
+        case 'SET':       title = stmt.option ? `SET ${stmt.option} ${stmt.value}` : stmt.varName ? `SET ${stmt.varName}` : 'SET'; break;
+        case 'TRY_BLOCK': title = `TRY (${(stmt.tryStmts||[]).length} stmt) / CATCH (${(stmt.catchStmts||[]).length} stmt)`; break;
+        default:          title = stmt.stmtType;
       }
 
       card.innerHTML = `
@@ -1000,6 +1070,14 @@
             if (stmt.indexedColumns && stmt.indexedColumns.length) bodyHTML += chips('Indexed columns', stmt.indexedColumns);
             if (stmt.isUnique) bodyHTML += detail('Unique', 'Yes');
           }
+          if ((stmt.objectType === 'PROCEDURE' || stmt.objectType === 'FUNCTION') && stmt.bodyStmts && stmt.bodyStmts.length) {
+            bodyHTML += `<div class="stmt-detail" style="width:100%">
+              <span class="stmt-detail-label">Body (${stmt.bodyStmts.length} top-level statement${stmt.bodyStmts.length>1?'s':''})</span>
+              <div class="stmt-chip-list">${stmt.bodyStmts.map(s =>
+                `<span class="stmt-chip" style="border-color:${stmtColor(s.stmtType)};color:${stmtColor(s.stmtType)}">${esc(s.stmtType)}${s.targetTable?' → '+esc(s.targetTable):''}</span>`
+              ).join('')}</div>
+            </div>`;
+          }
           break;
         }
         case 'RENAME':
@@ -1069,6 +1147,24 @@
           }
           break;
         }
+        case 'TRY_BLOCK': {
+          const renderBlock = (label, stmts) => {
+            if (!stmts || !stmts.length) return '';
+            return `<div class="stmt-detail" style="width:100%">
+              <span class="stmt-detail-label">${label} (${stmts.length} statement${stmts.length>1?'s':''})</span>
+              <div class="stmt-chip-list">${stmts.map(s =>
+                `<span class="stmt-chip" style="border-color:${stmtColor(s.stmtType)};color:${stmtColor(s.stmtType)}">${esc(s.stmtType)}${s.targetTable?' → '+esc(s.targetTable):s.objectName?' '+esc(s.objectName):''}</span>`
+              ).join('')}</div>
+            </div>`;
+          };
+          bodyHTML += renderBlock('TRY block', stmt.tryStmts);
+          bodyHTML += renderBlock('CATCH block', stmt.catchStmts);
+          break;
+        }
+        case 'SET':
+          if (stmt.option) bodyHTML += detail('Option', `${stmt.option} = ${stmt.value}`);
+          if (stmt.varName) { bodyHTML += detail('Variable', stmt.varName); bodyHTML += detail('Value', stmt.value); }
+          break;
       }
       if (!bodyHTML) bodyHTML = `<span style="color:var(--text-dim);font-size:12px">${esc(stmt.stmtType)} statement</span>`;
       body.innerHTML = bodyHTML;

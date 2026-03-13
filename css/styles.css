@@ -285,6 +285,8 @@ html, body {
 /*  Join Diagram  */
 .diagram-wrap {
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 .diagram-container {
   width: 100%;
@@ -338,10 +340,7 @@ html, body {
   min-height: 0;
   height: 100%;
 }
-.diagram-wrap.is-fullscreen .fs-btn {
-  top: 12px;
-  right: 16px;
-}
+/* fs-btn lives inside .diagram-container, no position override needed for fullscreen */
 .node-rect {
   rx: 8;
   stroke-width: 1.5;
@@ -713,3 +712,44 @@ html, body {
   cursor: pointer;
 }
 .stmt-raw.expanded { max-height: none; }
+
+/* Query navigator bar */
+.query-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.query-nav.hidden { display: none; }
+.qnav-btn {
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 700;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+  min-width: 48px;
+  text-align: center;
+}
+.qnav-btn:disabled { opacity: 0.25; cursor: default; }
+.qnav-btn:not(:disabled):hover { background: var(--primary); color: #fff; border-color: var(--primary); transform: scale(1.08); }
+.qnav-btn:not(:disabled):active { transform: scale(0.96); }
+.qnav-center { display: flex; flex-direction: column; align-items: center; gap: 2px; flex: 1; min-width: 0; }
+.qnav-label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.qnav-pos { font-weight: 700; color: var(--primary); font-family: var(--font-mono); white-space: nowrap; font-size: 14px; }
+.qnav-lbl { color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 360px; }
+.qnav-hint { font-size: 11px; color: var(--text-muted); opacity: 0.65; letter-spacing: 0.01em; }
+/* Fullscreen: nav stays at the very top of the overlay */
+.diagram-wrap.is-fullscreen .query-nav {
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+}
