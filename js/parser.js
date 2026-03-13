@@ -827,12 +827,28 @@ class SQLParser {
     let pos = sql.match(/^IF\s*/i)[0].length;
     let condition = '';
     if (sql[pos] === '(') {
+      // IF (condition) — whole condition is parenthesized
       const end = this._findMatchingParen(sql, pos);
       condition = end !== -1 ? sql.slice(pos + 1, end).trim() : '';
       pos = end !== -1 ? end + 1 : pos;
     } else {
-      const m = sql.slice(pos).match(/^([\s\S]+?)(?=\s+BEGIN\b|\s+SELECT\b|\s+INSERT\b|\s+UPDATE\b|\s+DELETE\b|\s+EXEC\b)/i);
-      if (m) { condition = m[1].trim(); pos += m[0].length; }
+      // IF EXISTS (...) / IF NOT EXISTS (...) / bare condition
+      // Scan ahead char-by-char, tracking paren depth, until we hit BEGIN/SELECT/etc at depth 0
+      let depth = 0, i = pos, condEnd = pos;
+      while (i < sql.length) {
+        const ch = sql[i];
+        if (ch === '(') { depth++; i++; continue; }
+        if (ch === ')') { depth--; i++; condEnd = i; continue; }
+        if (depth === 0) {
+          // Check for statement-starting keywords at depth 0
+          const rest = sql.slice(i).toUpperCase();
+          if (/^(BEGIN|SELECT|INSERT|UPDATE|DELETE|EXEC|EXECUTE)\b/.test(rest)) break;
+        }
+        i++;
+        if (depth === 0) condEnd = i;
+      }
+      condition = sql.slice(pos, condEnd).trim();
+      pos = condEnd;
     }
     while (pos < sql.length && /\s/.test(sql[pos])) pos++;
 

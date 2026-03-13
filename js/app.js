@@ -260,8 +260,9 @@
       return e;
     };
 
-    /* Layout constants so they dont overflow */
-    const NODE_W  = 220;  // fixed node width
+    /* Layout constants — NODE_W grows to fit the longest table name */
+    const maxNameLen = Math.max(...tables.map(t => (t.alias ? t.name + ' (' + t.alias + ')' : t.name).length), 10);
+    const NODE_W  = Math.max(200, maxNameLen * 8 + 40);  // ~8px per monospace char + padding
     const HDR_H   = 42;   // header height
     const ROW_H   = 24;   // per-column row height
     const PAD     = 10;   // inner padding
@@ -540,9 +541,8 @@
         x: pos.x, y: pos.y + HDR_H - 8, width: NODE_W, height: 8, fill: color
       }));
 
-      /* Table name */
-      const shortName = display.length > 17 ? display.slice(0, 15) + '…' : display;
-      g.appendChild(mkt(pos.x + 12, pos.y + 18, shortName, {
+      /* Table name — full name, no truncation */
+      g.appendChild(mkt(pos.x + 12, pos.y + 18, display, {
         'font-size': '13', 'font-weight': '700', 'font-family': 'monospace', fill: '#ffffff'
       }));
 
